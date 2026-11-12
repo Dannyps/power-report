@@ -1,0 +1,13 @@
+# power-report: systemd/power-sync.service (install with bin/deploy)
+[Unit]
+# Mail on failure via homelab-ops' notify-failure@.service (optional; harmless if that unit does not exist)
+OnFailure=notify-failure@%n.service
+Description=Power usage: sync HA hourly statistics into Postgres
+After=postgresql.service docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/power-report.py sync
+Nice=10
+NoNewPrivileges=true
+ProtectHome=read-only

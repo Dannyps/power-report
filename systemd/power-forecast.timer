@@ -1,0 +1,11 @@
+# power-report: systemd/power-forecast.timer (install with bin/deploy)
+[Unit]
+Description=Nightly power usage forecast
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

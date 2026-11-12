@@ -1,0 +1,21 @@
+# Home Assistant side of the on-demand report (examples; paste into your own files).
+# HA touches a file in its config directory; on the host, systemd/power-report-request.path watches it and
+# starts power-report.service. HA's container needs no extra privileges for this.
+
+# configuration.yaml
+shell_command:
+  power_report_now: touch /config/.power-report-request
+
+# scripts.yaml
+power_report_now:
+  alias: Email power report now
+  icon: mdi:flash
+  description: Emails the power report for the last 7 days. At most one per minute.
+  mode: single
+  sequence:
+  - action: shell_command.power_report_now
+  - action: notify.send_message
+    data:
+      message: Power report requested, it arrives in about a minute.
+    target:
+      device_id: YOUR_PHONE_DEVICE_ID

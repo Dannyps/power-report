@@ -1,0 +1,24 @@
+# Example Grafana for power-report: host network so it reaches a local-only PostgreSQL on 127.0.0.1:5432.
+# .env (not in git): GRAFANA_ADMIN_PASSWORD=..., GRAFANA_RO_PASSWORD=..., plus GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+services:
+  grafana:
+    image: grafana/grafana-oss:13.0.2
+    container_name: grafana
+    restart: unless-stopped
+    network_mode: host
+    env_file: .env
+    environment:
+      GF_SERVER_HTTP_ADDR: 127.0.0.1
+      GF_SERVER_HTTP_PORT: "3000"
+      # behind a reverse proxy on a sub-path:
+      # GF_SERVER_ROOT_URL: https://example.org/grafana/
+      # GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"      # only if the proxy already requires a login
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      TZ: Europe/Lisbon
+    volumes:
+      - ./data:/var/lib/grafana
+      - ./provisioning:/etc/grafana/provisioning:ro
+      - ./dashboards:/var/lib/grafana-dashboards:ro

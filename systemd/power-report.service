@@ -1,0 +1,15 @@
+# power-report: systemd/power-report.service (install with bin/deploy)
+[Unit]
+# Mail on failure via homelab-ops' notify-failure@.service (optional; harmless if that unit does not exist)
+OnFailure=notify-failure@%n.service
+Description=Power usage: weekly report by email
+After=postgresql.service docker.service
+
+[Service]
+Type=oneshot
+# One command for all three steps: a site whose sync fails (e.g. a remote host unreachable) no longer stops
+# the forecast and the reports of the other sites; the unit still ends failed so OnFailure= mails about it.
+ExecStart=/usr/local/bin/power-report.py run
+Nice=10
+NoNewPrivileges=true
+ProtectHome=read-only

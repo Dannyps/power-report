@@ -1,0 +1,13 @@
+#!/usr/bin/env python3
+"""Entry point. Installed as /usr/local/bin/power-report.py (the name the units and docs use); the package lives in
+/usr/local/lib/power-report/. Run from a checkout, it uses the checkout's package. See power_report/cli.py."""
+import sys
+from pathlib import Path
+
+for base in (Path(__file__).resolve().parent.parent, Path("/usr/local/lib/power-report")):
+    if (base / "power_report" / "__init__.py").is_file():
+        sys.path.insert(0, str(base))
+        break
+from power_report.cli import main  # noqa: E402
+
+sys.exit(main())

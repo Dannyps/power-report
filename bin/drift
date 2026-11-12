@@ -1,0 +1,45 @@
+#!/usr/bin/env python3
+"""Show where the installed power-report differs from this checkout (hand edits, half-done deploys). Exit 1 if it does.
+
+  changed   installed file differs from the repo     missing   in the repo, not installed (run bin/deploy)
+  remote    a site's exporter (install_ssh) differs   disabled  a timer/path unit is not enabled
+  extra     a .py file in the installed package that the repo does not have
+"""
+
+import subprocess
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import targets as T  # noqa: E402
+
+
+def main():
+    cfg = T.load()
+    found = []
+    for src, live in T.local_pairs(cfg):
+        if not live.exists():
+            found.append(("missing", str(live)))
+        elif live.read_bytes() != src.read_bytes():
+            found.append(("changed", str(live)))
+    known = {p.name for p in (T.REPO / "power_report").glob("*.py")}
+    for p in sorted((T.LIB / "power_report").glob("*.py")) if (T.LIB / "power_report").is_dir() else []:
+        if p.name not in known:
+            found.append(("extra", str(p)))
+    want = T.sha(T.REPO / "exporter" / "power-export")
+    for site, target, path in T.remote_exporters(cfg):
+        got = T.remote_sha(target, path)
+        if got != want:
+            found.append(("remote", f"{target}:{path}" + ("" if got else " (unreachable or missing)")))
+    for u in T.ENABLE:
+        if subprocess.run(["systemctl", "is-enabled", "--quiet", u]).returncode != 0:
+            found.append(("disabled", u))
+    for kind, what in found:
+        print(f"{kind:9} {what}")
+    if not found:
+        print("power-report: no drift, installed files match the repo")
+    return 1 if found else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

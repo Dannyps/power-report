@@ -1,0 +1,155 @@
+#!/usr/bin/env python3
+"""Install power-report from this checkout (as root, on the host with the database and the config).
+
+  bin/deploy                     run the unit tests, install what changed, daemon-reload, enable the timers, bin/check
+  bin/deploy --dry-run           show what would change
+  bin/deploy --no-check          skip bin/check at the end
+  bin/deploy --rollback [STAMP]  put back what a deploy replaced (default: the latest), including remote exporters
+
+Installs: the package in /usr/local/lib/power-report/, the CLI as /usr/local/bin/power-report.py, the local exporter,
+the systemd units and tmpfiles rule, the web endpoint ([deploy] web), the exporter on every site with `install_ssh`
+(over SSH), and the Grafana dashboard ([grafana] dashboard_out, regenerated; Grafana reloads provisioned files).
+Everything replaced is saved first in /var/backups/power-report/<STAMP>/. Unit files are checked with
+systemd-analyze verify before the reload; a failure rolls the deploy back.
+"""
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import targets as T  # noqa: E402
+
+
+def install(src: Path, dst: Path):
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    mode = dst.stat().st_mode & 0o7777 if dst.exists() else (0o755 if os.access(src, os.X_OK) else 0o644)
+    tmp = dst.with_name(f".{dst.name}.deploy-tmp")
+    shutil.copyfile(src, tmp)
+    os.chmod(tmp, mode)
+    os.replace(tmp, dst)
+
+
+def dashboard(cfg):
+    """(generated JSON path in a temp dir, live path) or None when no dashboard is configured."""
+    out = cfg.grafana.get("dashboard_out")
+    if not out:
+        return None
+    tmp = Path(tempfile.mkdtemp()) / "power.json"
+    r = subprocess.run([sys.executable, str(T.REPO / "grafana" / "make-dashboard.py"), "--out", str(tmp)], capture_output=True, text=True)
+    if r.returncode:
+        sys.exit("grafana/make-dashboard.py failed: " + r.stderr.strip())
+    return tmp, Path(out)
+
+
+def rollback(stamp):
+    stamps = sorted(p for p in T.BACKUPS.glob("*") if (p / "deploy.json").is_file())
+    if not stamps:
+        sys.exit(f"no deploy backups in {T.BACKUPS}")
+    d = T.BACKUPS / stamp if stamp else stamps[-1]
+    meta = json.loads((d / "deploy.json").read_text())
+    for live in meta["saved"]:
+        shutil.copy2(d / Path(live).relative_to("/"), live)
+        print(f"restored {live}")
+    for live in meta["created"]:
+        if Path(live).exists():
+            Path(live).unlink()
+            print(f"deleted  {live}")
+    for target, path in meta.get("remote", []):
+        data = (d / "remote" / target / path.lstrip("/")).read_bytes()
+        r = T.ssh(target, f"cat > {path}.tmp && chmod 755 {path}.tmp && mv {path}.tmp {path}", data)
+        print(f"restored {target}:{path}" if r.returncode == 0 else f"FAILED to restore {target}:{path}")
+    subprocess.run(["systemctl", "daemon-reload"])
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--no-check", action="store_true")
+    ap.add_argument("--rollback", nargs="?", const="", metavar="STAMP")
+    a = ap.parse_args()
+    if os.geteuid() != 0:
+        sys.exit("run as root")
+    if a.rollback is not None:
+        return rollback(a.rollback or None)
+    cfg = T.load()
+
+    pairs = T.local_pairs(cfg)
+    dash = dashboard(cfg)
+    if dash:
+        pairs.append(dash)
+    changes = [(s, d) for s, d in pairs if not (d.is_file() and s.read_bytes() == d.read_bytes())]
+    exporter = T.REPO / "exporter" / "power-export"
+    remote = [(t, p) for _, t, p in T.remote_exporters(cfg) if T.remote_sha(t, p) != T.sha(exporter)]
+    enable = [u for u in T.ENABLE if subprocess.run(["systemctl", "is-enabled", "--quiet", u]).returncode != 0]
+    check = str(T.REPO / "bin" / "check")
+    if not changes and not remote and not enable:
+        print("power-report: nothing to deploy, live matches the repo")
+        return 0 if (a.no_check or a.dry_run) else os.system(check) >> 8
+    for s, d in changes:
+        print(("update " if d.exists() else "create ") + str(d))
+    for t, p in remote:
+        print(f"update {t}:{p}")
+    for u in enable:
+        print(f"enable {u}")
+    if a.dry_run:
+        return 0
+    if os.system(f"{T.REPO / 'bin' / 'test'} -q") != 0:
+        sys.exit("unit tests FAILED (bin/test): nothing was installed")
+
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    d = T.BACKUPS / stamp
+    d.mkdir(parents=True, mode=0o700)
+    saved, created, rsaved = [], [], []
+    for _, live in changes:
+        if live.exists():
+            keep = d / live.relative_to("/")
+            keep.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(live, keep)
+            saved.append(str(live))
+        else:
+            created.append(str(live))
+    for t, p in remote:
+        r = T.ssh(t, f"cat {p}")
+        if r.returncode == 0:
+            keep = d / "remote" / t / p.lstrip("/")
+            keep.parent.mkdir(parents=True, exist_ok=True)
+            keep.write_bytes(r.stdout)
+            rsaved.append([t, p])
+    head = subprocess.run(["git", "-C", str(T.REPO), "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
+    (d / "deploy.json").write_text(json.dumps({"commit": head or "none", "saved": saved, "created": created, "remote": rsaved}, indent=1))
+
+    for s, live in changes:
+        install(s, live)
+    units = [str(live) for _, live in changes if live.parent == T.UNIT_DIR]
+    if units:
+        r = subprocess.run(["systemd-analyze", "verify", *units], capture_output=True, text=True)
+        errs = [l for l in (r.stdout + r.stderr).splitlines() if any(u in l for u in units)]
+        if r.returncode or errs:
+            print("\n".join(errs))
+            rollback(stamp)
+            sys.exit(f"systemd-analyze verify FAILED: deploy rolled back (backup {d})")
+        subprocess.run(["systemctl", "daemon-reload"], check=True)
+        print("systemd: daemon-reload")
+    if any(str(live).startswith("/etc/tmpfiles.d/") for _, live in changes):
+        subprocess.run(["systemd-tmpfiles", "--create", "/etc/tmpfiles.d/power-report.conf"])
+    for t, p in remote:
+        r = T.ssh(t, f"cat > {p}.tmp && chmod 755 {p}.tmp && mv {p}.tmp {p}", exporter.read_bytes())
+        print(f"installed the exporter on {t}:{p}" if r.returncode == 0 else f"FAILED to install the exporter on {t}: {r.stderr.decode().strip()}")
+    for u in enable:
+        r = subprocess.run(["systemctl", "enable", "--now", u], capture_output=True, text=True)
+        print(f"systemd: enabled {u}" if r.returncode == 0 else f"systemd: enabling {u} FAILED: {r.stderr.strip()}")
+    print(f"deployed {len(changes)} file(s), {len(remote)} remote exporter(s), {len(enable)} unit(s) enabled "
+          f"(backup {d}; undo: bin/deploy --rollback {stamp})")
+    return 0 if a.no_check else os.system(check) >> 8
+
+
+if __name__ == "__main__":
+    sys.exit(main())

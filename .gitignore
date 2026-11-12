@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+# never commit real configuration, data or reports
+config.toml
+*.dump
+*.sql.gz
+*.html
+!web/*.php
+reports/

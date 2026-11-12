@@ -1,0 +1,3 @@
+#!/bin/sh
+# power-report: enabled with `git config core.hooksPath bin/hooks` (see README).
+exec "$(git rev-parse --show-toplevel)/bin/secret-scan"

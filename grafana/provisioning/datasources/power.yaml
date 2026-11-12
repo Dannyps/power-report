@@ -1,0 +1,18 @@
+# Grafana datasource for power-report (copy into your provisioning/datasources/). GRAFANA_RO_PASSWORD comes from
+# the container environment (.env); the grafana_ro role needs SELECT on the power tables (see sql/schema.sql).
+apiVersion: 1
+datasources:
+  - name: Power
+    uid: power-pg
+    type: postgres
+    access: proxy
+    url: 127.0.0.1:5432
+    user: grafana_ro
+    isDefault: true
+    jsonData:
+      database: power
+      sslmode: disable
+      postgresVersion: 1700
+      timescaledb: false
+    secureJsonData:
+      password: ${GRAFANA_RO_PASSWORD}

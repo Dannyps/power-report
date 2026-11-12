@@ -1,0 +1,61 @@
+# power-report configuration. Copy to /etc/power-report/config.toml (mode 600) and edit.
+# POWER_REPORT_CONFIG=/path/to/config.toml overrides the location. Never commit your real config.
+
+timezone = "Europe/Lisbon"           # local time for days, hours and the report
+horizon_days = 40                    # forecast horizon
+no_send_dir = "/tmp"                 # where `report --no-send` writes power-report-<site>.html
+
+[mail]
+sender = "Power report <root@example.org>"
+to = "root"
+sendmail = "/usr/sbin/sendmail"
+
+[database]                           # PostgreSQL, schema in sql/schema.sql
+host = "127.0.0.1"
+name = "power"
+user = "power"
+password_file = "/etc/power-report/pgpass"
+
+[exporter]
+local = "/usr/local/lib/power-report/power-export"   # used for sites with `ha` (same host)
+
+[grafana]                            # optional: grafana/make-dashboard.py and grafana/test-dashboard.py
+dashboard_out = "/srv/grafana/dashboards/power.json"
+default_site = "home"
+env_file = "/srv/grafana/.env"       # holds GRAFANA_ADMIN_PASSWORD, read by test-dashboard.py
+
+[deploy]                             # optional, used by bin/deploy / drift / check
+web = "/var/www/html/internal/power-report.php"   # the "email report now" endpoint; "" to skip
+web_url = "https://example.org/internal/power-report.php"
+
+# One table per Home Assistant instance ("site"). Site names are used in the database and the reports.
+
+# A Home Assistant on this host: the exporter reads its config directory directly.
+[sites.home]
+ha = "/srv/homeassistant/config"
+# Energy entities that are whole circuits (the rest of HA's "individual devices" are reported as devices).
+circuits = ["sensor.panel_meter_1_energy", "sensor.panel_meter_2_energy"]
+
+[sites.home.labels]                  # optional display names by entity id (default: HA device names)
+"sensor.panel_meter_1_energy" = "Sockets"
+
+# A Home Assistant on another host, read over SSH. On that host the key's authorized_keys line should be
+# restrict,command="/usr/local/bin/power-export" so it can only run the read-only exporter.
+[sites.cabin]
+ssh = ["ssh", "-i", "/root/.ssh/power-export_cabin", "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
+       "-o", "ConnectTimeout=20", "power-export@cabin.example.org"]
+install_ssh = "root@cabin.example.org"   # optional: bin/deploy installs the exporter there
+install_path = "/usr/local/bin/power-export"
+# When HA's grid sources are tariff registers, name the meter that measures the whole house:
+house = "sensor.smart_meter_energy_import"
+house_rate = "sensor.smart_meter_power"
+circuits = []
+
+[sites.cabin.labels]
+"sensor.smart_meter_energy_import" = "House (smart meter)"
+
+# Optional: an EV that is not metered, read from the house meter's night load.
+[sites.cabin.ev]
+first_hour = 0                       # night window, local hours (inclusive)
+last_hour = 6
+min_peak_kwh = 1.5                   # a night with an hour at least this high is a charging session

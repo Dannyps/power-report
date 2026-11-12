@@ -1,0 +1,11 @@
+# power-report: systemd/power-report-request.path (install with bin/deploy)
+[Unit]
+Description=Power usage: watch for on-demand report requests (web and Home Assistant)
+
+[Path]
+PathExists=/run/power-report/request
+PathExists=/home/homeassistant/config/.power-report-request
+Unit=power-report-request.service
+
+[Install]
+WantedBy=paths.target

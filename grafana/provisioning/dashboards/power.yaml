@@ -1,0 +1,8 @@
+# Dashboard provider: point path at the directory where grafana/make-dashboard.py writes power.json.
+apiVersion: 1
+providers:
+  - name: power
+    type: file
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana-dashboards

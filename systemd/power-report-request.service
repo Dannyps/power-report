@@ -1,0 +1,9 @@
+# power-report: systemd/power-report-request.service (install with bin/deploy)
+[Unit]
+Description=Power usage: on-demand report request
+
+[Service]
+Type=oneshot
+ExecStart=/bin/rm -f /run/power-report/request /home/homeassistant/config/.power-report-request
+# at most one on-demand report per minute (double presses, repeated taps)
+ExecStart=/bin/sh -c 'if [ -n "$(find /run/power-report/last -newermt "-60 seconds" 2>/dev/null)" ]; then echo "skipped: a report was requested less than 60 s ago"; exit 0; fi; touch /run/power-report/last; exec /bin/systemctl start --no-block power-report.service'

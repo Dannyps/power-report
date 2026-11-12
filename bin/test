@@ -1,0 +1,8 @@
+#!/bin/sh
+# Run the unit tests (synthetic data only). `bin/test -q` for a one-line summary. bin/deploy runs them first.
+cd "$(dirname "$0")/.." || exit 1
+if [ "$1" = "-q" ]; then
+    out=$(python3 -m unittest discover -s tests 2>&1) && { echo "tests: $(echo "$out" | grep -oE "Ran [0-9]+ tests?") OK"; exit 0; }
+    echo "$out"; exit 1
+fi
+exec python3 -m unittest discover -s tests -v

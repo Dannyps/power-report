@@ -1,0 +1,13 @@
+# power-report: systemd/power-forecast.service (install with bin/deploy)
+[Unit]
+# Mail on failure via homelab-ops' notify-failure@.service (optional; harmless if that unit does not exist)
+OnFailure=notify-failure@%n.service
+Description=Power usage: rebuild the forecast
+After=postgresql.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/power-report.py forecast
+Nice=10
+NoNewPrivileges=true
+ProtectHome=read-only

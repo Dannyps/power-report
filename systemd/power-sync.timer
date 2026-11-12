@@ -1,0 +1,10 @@
+# power-report: systemd/power-sync.timer (install with bin/deploy)
+[Unit]
+Description=Power usage hourly sync
+
+[Timer]
+OnCalendar=*:10:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

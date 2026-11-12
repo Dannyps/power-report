@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""Read-only export of a Home Assistant's energy data for power-report (exporter/power-export in the repo).
+
+On a remote Home Assistant host it runs only as the forced command of an SSH key, e.g. in
+~power-export/.ssh/authorized_keys:  restrict,from="<reporting host>",command="/usr/local/bin/power-export" ssh-ed25519 ...
+The request comes in SSH_ORIGINAL_COMMAND:
+  config [entity ...]            HA energy config, plus device names and units for its entities and the extra ones
+  stats <since_ts> <entity> ...  hourly statistics [start_ts, sum, mean] with start_ts >= since_ts
+Output is JSON on stdout. The recorder database is opened read-only; nothing is written.
+On the reporting host the same file runs locally with HA_CONFIG set to that host's HA config directory.
+HA_CONFIG defaults to /home/homeassistant/ha-config (the remote host's layout this was written for).
+"""
+import json
+import os
+import re
+import sqlite3
+import sys
+
+HA = os.environ.get("HA_CONFIG", "/home/homeassistant/ha-config")
+ENTITY = re.compile(r"^sensor\.[a-z0-9_]{1,200}$")
+
+
+def load(name):
+    return json.load(open(f"{HA}/.storage/{name}"))["data"]
+
+
+def db():
+    return sqlite3.connect(f"file:{HA}/home-assistant_v2.db?mode=ro", uri=True)
+
+
+def config(extra):
+    energy = load("energy")
+    ents = set(extra)
+    for s in energy.get("energy_sources", []):
+        ents.update(v for k, v in s.items() if k.startswith("stat_") and isinstance(v, str))
+    for d in energy.get("device_consumption", []):
+        ents.update(v for k, v in d.items() if k in ("stat_consumption", "stat_rate", "included_in_stat") and v)
+    reg = {e["entity_id"]: e for e in load("core.entity_registry")["entities"]}
+    dev = {d["id"]: d for d in load("core.device_registry")["devices"]}
+    names = {}
+    for e in ents:
+        d = dev.get((reg.get(e) or {}).get("device_id"))
+        if d:
+            names[e] = (d.get("name_by_user") or d.get("name") or "").strip() or None
+    units = {}
+    for sid, unit in db().execute("select statistic_id, unit_of_measurement from statistics_meta"):
+        if sid in ents:
+            units[sid] = unit
+    return dict(energy=energy, names=names, units=units)
+
+
+def stats(since, ents):
+    con = db()
+    ids = dict(con.execute("select statistic_id, id from statistics_meta"))
+    out = {}
+    for e in ents:
+        if e in ids:
+            out[e] = con.execute("select start_ts, sum, mean from statistics where metadata_id=? and start_ts>=? order by start_ts",
+                                 (ids[e], since)).fetchall()
+    return out
+
+
+def main():
+    args = os.environ.get("SSH_ORIGINAL_COMMAND", "").split()
+    if not args:
+        sys.exit("usage: config [entity ...] | stats <since_ts> <entity> ...")
+    cmd, rest = args[0], args[1:]
+    if cmd == "stats" and rest:
+        since, rest = float(rest[0]), rest[1:]
+    elif cmd != "config":
+        sys.exit("unknown command")
+    if len(rest) > 100 or not all(ENTITY.match(e) for e in rest):
+        sys.exit("bad entity id")
+    json.dump(config(rest) if cmd == "config" else stats(since, rest), sys.stdout, separators=(",", ":"))
+
+
+if __name__ == "__main__":
+    main()

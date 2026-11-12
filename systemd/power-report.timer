@@ -1,0 +1,10 @@
+# power-report: systemd/power-report.timer (install with bin/deploy)
+[Unit]
+Description=Weekly power usage report, Saturday 07:00 Lisbon time
+
+[Timer]
+OnCalendar=Sat *-*-* 07:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

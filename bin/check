@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""Smoke test of the installed power-report (read-only; prints no readings). bin/deploy runs it at the end.
+
+  - config loads; the database answers and has every configured site
+  - each site's exporter answers `config` (locally or over SSH)
+  - the newest hourly row per site is recent (a WARN after 6 h: a remote site may just be down)
+  - a full report builds for every site (report --no-send into a temp dir; nothing is mailed or printed)
+  - timers/path are enabled and their services did not fail last time
+  - the web endpoint refuses a GET (405 behind the login means 401; either is fine, 200 is not)
+Exit 1 if anything FAILs.
+"""
+
+import datetime as dt
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import targets as T  # noqa: E402
+from power_report import db  # noqa: E402
+from power_report.exporter import export  # noqa: E402
+
+fails = warns = 0
+
+
+def report(ok, what, warn=False):
+    global fails, warns
+    if ok:
+        print(f"ok    {what}")
+    elif warn:
+        warns += 1
+        print(f"WARN  {what}")
+    else:
+        fails += 1
+        print(f"FAIL  {what}")
+
+
+def main():
+    print("== power-report")
+    try:
+        cfg = T.load()
+        report(True, f"config: {len(cfg.sites)} site(s): {', '.join(cfg.sites)}")
+    except Exception as e:
+        report(False, f"config: {e}")
+        return 1
+    try:
+        con = db.connect(cfg)
+        cur = con.cursor()
+        cur.execute("select site, max(ts) from hourly where entity in (select entity from entities e where e.kind='house' and e.site=hourly.site) group by site")
+        newest = dict(cur.fetchall())
+        report(True, "database answers")
+    except Exception as e:
+        report(False, f"database: {e}")
+        return 1
+    now = dt.datetime.now(dt.timezone.utc)
+    for site in cfg.sites:
+        try:
+            out = export(cfg, site, "config")
+            report("energy" in out, f"{site}: exporter answers ({'ssh' if 'ssh' in cfg.sites[site] else 'local'})")
+        except Exception as e:
+            report(False, f"{site}: exporter: {e}")
+        ts = newest.get(site)
+        report(ts is not None and now - ts < dt.timedelta(hours=6),
+               f"{site}: newest hourly data {'none' if ts is None else f'{(now - ts).total_seconds() / 3600:.1f} h old'}", warn=True)
+    tmp = tempfile.mkdtemp(prefix="power-check-")
+    try:
+        r = subprocess.run(["/usr/local/bin/power-report.py", "report", "--no-send"], capture_output=True, text=True,
+                           env=dict(os.environ, POWER_REPORT_NO_SEND_DIR=tmp), cwd="/tmp")
+        built = sorted(p.name for p in Path(tmp).glob("power-report-*.html"))
+        report(r.returncode == 0 and len(built) == len(cfg.sites),
+               f"report builds for every site ({len(built)} of {len(cfg.sites)})" + (f": {r.stderr.strip()[:300]}" if r.returncode else ""))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    for u in T.ENABLE:
+        en = subprocess.run(["systemctl", "is-enabled", "--quiet", u]).returncode == 0
+        act = subprocess.run(["systemctl", "is-active", "--quiet", u]).returncode == 0
+        report(en and act, f"{u} enabled and active")
+        svc = u.rsplit(".", 1)[0] + ".service"
+        res = subprocess.run(["systemctl", "show", svc, "-p", "Result", "--value"], capture_output=True, text=True).stdout.strip()
+        report(res in ("success", ""), f"{svc} last result: {res or 'not run yet'}")
+    url = cfg.deploy.get("web_url")
+    if url:
+        host = url.split("/")[2]
+        r = subprocess.run(["curl", "-sk", "-o", "/dev/null", "-w", "%{http_code}", "-m", "10", "--resolve", f"{host}:443:127.0.0.1", url],
+                           capture_output=True, text=True)
+        report(r.stdout in ("401", "405"), f"web endpoint refuses a GET (got {r.stdout})")
+    print(f"== power-report: {fails} failed, {warns} warnings")
+    return 1 if fails else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
