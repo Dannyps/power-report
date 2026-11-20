@@ -118,6 +118,60 @@ def sync(cfg, site):
         nev = derive_ev(cfg, cur, site, house, min(prices), since.get(house, 0))
     con.commit()
     print(f"sync {site}: {n} hourly rows" + (f", {fixed} meter outages spread" if fixed else "") + (f", {nev} EV nights" if nev else ""))
+    if climate_entities(s):
+        nc = sync_climate(cfg, cur, site)
+        con.commit()
+        print(f"sync {site}: {nc} climate rows")
+
+
+# metrics read from a site's optional [climate] table: counters are stored as the change over each hour
+COUNTERS = {"heating_hours": "Heating (relay on)", "burner_hours": "Burner on", "gas": "Gas"}
+MEASUREMENTS = ("temperature", "humidity")
+
+
+def climate_entities(s):
+    """{entity: (metric, label)} for a site's optional [climate] table (see config.example.toml)."""
+    c = s.get("climate") or {}
+    out = {c[k]: (k, label) for k, label in COUNTERS.items() if c.get(k)}
+    for room in c.get("rooms", []):
+        out.update({room[k]: (k, room["label"]) for k in MEASUREMENTS if room.get(k)})
+    return out
+
+
+def climate_rows(site, ents, data, since):
+    """Rows (site, entity, ts, metric, label, value) from the exporter's [start_ts, sum, mean] statistics, for hours
+    starting at or after since[entity]: counters as the change of HA's running sum over the hour (a gap in the
+    statistics puts the whole change on the hour after it), measurements as HA's hourly mean."""
+    out = []
+    for ent, (metric, label) in ents.items():
+        prev = None
+        for ts, total, mean in data.get(ent, []):
+            if metric in COUNTERS:
+                if prev is not None and total is not None and ts >= since[ent]:
+                    out.append((site, ent, utc(ts), metric, label, max(total - prev, 0.0)))
+                if total is not None:
+                    prev = total
+            elif mean is not None and ts >= since[ent]:
+                out.append((site, ent, utc(ts), metric, label, mean))
+    return out
+
+
+def sync_climate(cfg, cur, site):
+    ents = climate_entities(cfg.sites[site])
+    since = {}
+    for ent in ents:
+        cur.execute("select max(ts) from climate_hourly where site=%s and entity=%s", (site, ent))
+        last = cur.fetchone()[0]
+        since[ent] = (last - dt.timedelta(days=3)).timestamp() if last else 0
+    data = export(cfg, site, "stats", min(since.values()) - 3600, *sorted(ents))
+    for ent in ents:
+        if not data.get(ent):
+            print(f"{site}: no statistics for {ent} (climate)", file=sys.stderr)
+    out = climate_rows(site, ents, data, since)
+    psycopg2.extras.execute_values(cur, """insert into climate_hourly (site, entity, ts, metric, label, value) values %s
+        on conflict (site, entity, ts) do update set metric=excluded.metric, label=excluded.label, value=excluded.value""",
+        out, page_size=5000)
+    return len(out)
 
 
 def derive_ev(cfg, cur, site, house, price, since):

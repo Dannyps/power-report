@@ -42,6 +42,55 @@ def season_text(m, today):
             f"highest {name(hi)} {f(hi)}, lowest {name(lo)} {f(lo)}.")
 
 
+def climate_summary(cur, cfg, site, w2, w1, today):
+    """Heating hours, gas and indoor climate for [w1, today) and the week before, from climate_hourly.
+    None for a site without a [climate] table."""
+    c = cfg.sites[site].get("climate")
+    if not c:
+        return None
+    tz = cfg.tz_name
+    limit = float(c.get("humidity_limit", 65))
+    cur.execute("""select metric, label, (ts at time zone %s)::date, sum(value), count(*), min(value), max(value),
+                          count(*) filter (where value > %s)
+                   from climate_hourly where site=%s and (ts at time zone %s)::date >= %s and (ts at time zone %s)::date < %s
+                   group by 1, 2, 3""", (tz, limit, site, tz, w2, tz, today))
+    rows = cur.fetchall()
+
+    def week(day):
+        return "cur" if day >= w1 else "prev"
+    counters = {}
+    for metric in ("heating_hours", "burner_hours", "gas"):
+        if c.get(metric):
+            got = [r for r in rows if r[0] == metric]
+            counters[metric] = dict(cur=sum(r[3] for r in got if week(r[2]) == "cur"),
+                                    prev=sum(r[3] for r in got if week(r[2]) == "prev"),
+                                    hours=sum(r[4] for r in got if week(r[2]) == "cur"),
+                                    days={w1 + dt.timedelta(days=i): None for i in range((today - w1).days)})
+            for r in got:
+                if r[2] >= w1:
+                    counters[metric]["days"][r[2]] = r[3]
+    rooms = []
+    for room in c.get("rooms", []):
+        out = dict(label=room["label"])
+        for metric in ("temperature", "humidity"):
+            got = [r for r in rows if r[0] == metric and r[1] == room["label"]]
+            for k in ("cur", "prev"):
+                g = [r for r in got if week(r[2]) == k]
+                n = sum(r[4] for r in g)
+                out[f"{metric}_{k}"] = sum(r[3] for r in g) / n if n else None
+                if k == "cur":
+                    out[f"{metric}_min"] = min((r[5] for r in g), default=None)
+                    out[f"{metric}_max"] = max((r[6] for r in g), default=None)
+                    out[f"{metric}_hours"] = n
+                    if metric == "humidity":
+                        out["damp_hours"] = sum(r[7] for r in g)
+        rooms.append(out)
+    cur.execute("select min(ts) from climate_hourly where site=%s", (site,))
+    first = cur.fetchone()[0]
+    return dict(counters=counters, rooms=rooms, limit=limit, gas_kwh=c.get("gas_kwh_per_m3"),
+                first=first.astimezone(cfg.tz).date() if first else None)
+
+
 def build(cfg, site, now=None):
     """All figures of a site's report as a dict (see render.py). `now` defaults to the current time."""
     clock = now or dt.datetime.now(cfg.tz)
@@ -173,7 +222,8 @@ def build(cfg, site, now=None):
                 next7=next7, band7=band7, first=first.astimezone(TZ).date(), stale=stale, ndays_left=ndays_left,
                 tariff_text=tariff_text, E=E, away_week=away_week, away_since=away_since, away_nights=away_nights,
                 away_min=AWAY_NIGHTS, ev_window=(ev.get("first_hour", 0), ev.get("last_hour", 6)),
-                forecast_text=forecast_text, season_text=season_text(m, today))
+                forecast_text=forecast_text, season_text=season_text(m, today),
+                climate=climate_summary(cur, cfg, site, w2, w1, today))
 
 
 def report(cfg, site, send=True, now=None):

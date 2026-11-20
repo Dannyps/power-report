@@ -39,6 +39,20 @@ circuits = ["sensor.panel_meter_1_energy", "sensor.panel_meter_2_energy"]
 [sites.home.labels]                  # optional display names by entity id (default: HA device names)
 "sensor.panel_meter_1_energy" = "Sockets"
 
+# Optional: heating and indoor climate, read from HA's hourly statistics into the climate_hourly table, shown in the
+# report ("Heating and indoor climate") and in Grafana. Every key is optional.
+[sites.home.climate]
+heating_hours = "sensor.heating_hours_today"   # hours the heating was on (e.g. a History stats helper, state class total_increasing)
+burner_hours = "sensor.burner_hours_today"     # hours the boiler was actually firing (same kind of counter)
+gas = "sensor.gas_meter"                       # gas meter in m³ (total_increasing)
+gas_kwh_per_m3 = 11.0                          # to show gas in kWh too (your bill states the factor)
+humidity_limit = 65                            # hours with an hourly mean above this count as damp
+
+[[sites.home.climate.rooms]]                   # one table per room or floor
+label = "Living room"
+temperature = "sensor.living_room_temperature"
+humidity = "sensor.living_room_humidity"
+
 # A Home Assistant on another host, read over SSH. On that host the key's authorized_keys line should be
 # restrict,command="/usr/local/bin/power-export" so it can only run the read-only exporter.
 [sites.cabin]

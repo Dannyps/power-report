@@ -12,6 +12,9 @@ plain-text + HTML report per home; Grafana can chart the same tables.
 - **report** (weekly, or on demand from a web button or a Home Assistant script): last 7 days vs the previous week
   and the 4-week average, cost (flat or per tariff register), circuits and devices, weekday/weekend and hourly
   pattern, night standby load, month-to-date and projection, EV sessions, away detection, season hints.
+- **heating and indoor climate** (optional, per home): heating and burner hours, gas from the meter readings, and
+  room temperature and humidity (hours above a damp limit), synced into `climate_hourly`, shown as a report section
+  and as Grafana panels. Configure `[sites.<name>.climate]` (see `config.example.toml`).
 
 Python 3.11+ stdlib plus `psycopg2`. Your data stays in your database: nothing here talks to any service but your
 own Home Assistant and PostgreSQL.

@@ -144,6 +144,24 @@ panels.append(panel("table", "Circuits, tariffs and devices: last 7 days vs the 
         {"id": "unit", "value": "percent"}, {"id": "custom.cellOptions", "value": {"type": "color-text"}},
         {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "green", "value": None}, {"color": "text", "value": -10}, {"color": "red", "value": 10}]}}]}]}}))
 
+# --- heating and indoor climate (sites with a [climate] table; empty for the others)
+legend = {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi"}}
+line = {"drawStyle": "line", "fillOpacity": 0, "lineWidth": 2, "showPoints": "never", "spanNulls": 7200000}
+panels.append(panel("timeseries", "Heating hours per day (relay on, burner on)", f"""select (ts at time zone '{TZ}')::date::timestamp as time,
+  label as metric, sum(value) as value from climate_hourly where {SITE} and metric in ('heating_hours', 'burner_hours') and $__timeFilter(ts)
+  group by 1, 2 order by 1""", 0, 56, 12, 8, unit="h", custom=bars, decimals=1,
+    options={"legend": {"displayMode": "list", "placement": "bottom", "calcs": ["sum"]}, "tooltip": {"mode": "multi"}}))
+panels.append(panel("timeseries", "Gas per day (from meter readings)", f"""select (ts at time zone '{TZ}')::date::timestamp as time,
+  sum(value) as "Gas" from climate_hourly where {SITE} and metric = 'gas' and $__timeFilter(ts) group by 1 order by 1""",
+    12, 56, 12, 8, unit="suffix: m³", custom=bars, decimals=2,
+    options={"legend": {"displayMode": "list", "placement": "bottom", "calcs": ["sum"]}, "tooltip": {"mode": "multi"}}))
+panels.append(panel("timeseries", "Indoor temperature, hourly mean", f"""select ts as time, label as metric, value from climate_hourly
+  where {SITE} and metric = 'temperature' and $__timeFilter(ts) order by 1""", 0, 64, 12, 9, unit="celsius", custom=line, decimals=1,
+    options=legend))
+panels.append(panel("timeseries", "Indoor humidity, hourly mean", f"""select ts as time, label as metric, value from climate_hourly
+  where {SITE} and metric = 'humidity' and $__timeFilter(ts) order by 1""", 12, 64, 12, 9, unit="percent", custom=line, decimals=0,
+    options=legend))
+
 dash = {"uid": "power-overview", "title": "Power", "tags": ["power"], "timezone": TZ, "schemaVersion": 39, "version": 1,
         "time": {"from": "now-45d", "to": "now+14d"}, "refresh": "", "panels": panels, "templating": {"list": [{"name": "site", "label": "Home", "type": "query", "datasource": DS, "multi": False, "includeAll": False,
         "query": "select distinct site from entities order by 1", "definition": "select distinct site from entities order by 1",

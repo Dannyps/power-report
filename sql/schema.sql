@@ -12,10 +12,10 @@
 -- PostgreSQL database dump
 --
 
-\restrict OLbYhWrsY6dP2syj9HGRKGLaD3VaB2Z7PFLzwHnCn97cJucouCcXEquCBcdq6YD
+\restrict fXSB8ipIGL1XD0nageQQPolE1h0cq53noQ3E3QcFvqMIO54zee1tMYrb38JwDh8
 
--- Dumped from database version 17.11 (Debian 17.11-0+deb13u1)
--- Dumped by pg_dump version 17.11 (Debian 17.11-0+deb13u1)
+-- Dumped from database version 17.12 (Debian 17.12-0+deb13u1)
+-- Dumped by pg_dump version 17.12 (Debian 17.12-0+deb13u1)
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -32,6 +32,27 @@ SET row_security = off;
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
+
+--
+-- Name: climate_hourly; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.climate_hourly (
+    site text NOT NULL,
+    entity text NOT NULL,
+    ts timestamp with time zone NOT NULL,
+    metric text NOT NULL,
+    label text NOT NULL,
+    value double precision NOT NULL
+);
+
+
+--
+-- Name: TABLE climate_hourly; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.climate_hourly IS 'Optional [sites.<site>.climate] entities from HA hourly statistics. Counters (metric heating_hours, burner_hours in h; gas in m3) hold the change over the hour; measurements (temperature in C, humidity in %) hold the hourly mean.';
+
 
 --
 -- Name: hourly; Type: TABLE; Schema: public; Owner: -
@@ -111,6 +132,14 @@ CREATE TABLE public.forecast (
 
 
 --
+-- Name: climate_hourly climate_hourly_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.climate_hourly
+    ADD CONSTRAINT climate_hourly_pkey PRIMARY KEY (site, entity, ts);
+
+
+--
 -- Name: entities entities_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -139,6 +168,13 @@ ALTER TABLE ONLY public.hourly
 --
 
 GRANT USAGE ON SCHEMA public TO grafana_ro;
+
+
+--
+-- Name: TABLE climate_hourly; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT ON TABLE public.climate_hourly TO grafana_ro;
 
 
 --
@@ -180,5 +216,5 @@ ALTER DEFAULT PRIVILEGES FOR ROLE power IN SCHEMA public GRANT SELECT ON TABLES 
 -- PostgreSQL database dump complete
 --
 
-\unrestrict OLbYhWrsY6dP2syj9HGRKGLaD3VaB2Z7PFLzwHnCn97cJucouCcXEquCBcdq6YD
+\unrestrict fXSB8ipIGL1XD0nageQQPolE1h0cq53noQ3E3QcFvqMIO54zee1tMYrb38JwDh8
 

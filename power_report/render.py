@@ -12,6 +12,86 @@ def fmt_pct(p):
     return "n/a" if p is None else f"{p:+.0f}%"
 
 
+def fmt_delta(a, b, unit=""):
+    """Change in absolute units (temperatures, where a percentage means little)."""
+    return "n/a" if a is None or b is None else f"{a - b:+.1f}{unit}"
+
+
+def heating_line(cl):
+    """Heating and burner hours, or None."""
+    k = cl["counters"]
+    heat, burn = k.get("heating_hours"), k.get("burner_hours")
+    if (heat or burn) and not (heat or burn)["hours"]:
+        return "Heating: no data for this week yet."
+    if heat:
+        s = f"Heating on {heat['cur']:.1f} h ({fmt_pct(pct(heat['cur'], heat['prev']))} vs previous week, {heat['prev']:.1f} h)"
+        if burn:
+            share = burn["cur"] / heat["cur"] * 100 if heat["cur"] else None
+            s += f", burner {burn['cur']:.1f} h" + (f" ({share:.0f}% of it)" if share is not None else "")
+        return s + "."
+    if burn:
+        return f"Burner on {burn['cur']:.1f} h ({fmt_pct(pct(burn['cur'], burn['prev']))} vs previous week)."
+    return None
+
+
+def gas_line(cl):
+    gas = cl["counters"].get("gas")
+    if not gas:
+        return None
+    if not gas["hours"]:
+        return "Gas: no data for this week yet."
+    kwh = f" = about {gas['cur'] * cl['gas_kwh']:.0f} kWh" if cl["gas_kwh"] else ""
+    return f"Gas {gas['cur']:.2f} m³{kwh} ({fmt_pct(pct(gas['cur'], gas['prev']))} vs previous week; from meter readings)."
+
+
+def room_line(rm, limit):
+    parts = []
+    if rm.get("temperature_cur") is not None:
+        parts.append(f"{rm['temperature_cur']:.1f} °C average ({fmt_delta(rm['temperature_cur'], rm['temperature_prev'], ' °C')} vs previous week), "
+                     f"hourly {rm['temperature_min']:.1f} to {rm['temperature_max']:.1f} °C")
+    if rm.get("humidity_cur") is not None:
+        parts.append(f"humidity {rm['humidity_cur']:.0f}% average, {rm['damp_hours']} h above {limit:.0f}%")
+    return f"{rm['label']}: " + "; ".join(parts) + "." if parts else None
+
+
+def climate_lines(cl):
+    """Plain-text lines for the optional heating and indoor climate section."""
+    L = [heating_line(cl)]
+    heat = cl["counters"].get("heating_hours")
+    if heat and heat["hours"]:
+        L.append("Daily heating hours: " + "  ".join(f"{d:%a} {v:.1f}" for d, v in heat["days"].items() if v is not None))
+    L.append(gas_line(cl))
+    L += [room_line(rm, cl["limit"]) for rm in cl["rooms"]]
+    if cl["first"]:
+        L.append(f"Climate data since {cl['first']:%a %d %b %Y}.")
+    return [x for x in L if x]
+
+
+def climate_html(cl):
+    """HTML for the optional heating and indoor climate section."""
+    e = html.escape
+    heat = cl["counters"].get("heating_hours")
+    bars = ""
+    if heat and heat["hours"]:
+        mx = max([v for v in heat["days"].values() if v] or [1])
+        bars = "<table class=bars>" + "".join(
+            f"<tr><td class=bl>{d:%a %d}</td><td class=bt><div style='width:{(v or 0) / mx * 100:.0f}%;background:#d9822b'></div></td>"
+            f"<td class='n bv'>{(v or 0):.1f} h</td></tr>" for d, v in heat["days"].items()) + "</table>"
+    rows = ""
+    for rm in cl["rooms"]:
+        t, h = rm.get("temperature_cur"), rm.get("humidity_cur")
+        rng = "" if t is None else f"{rm['temperature_min']:.1f} to {rm['temperature_max']:.1f}"
+        rows += (f"<tr><td>{e(rm['label'])}</td><td class=n>{'n/a' if t is None else f'{t:.1f}'}</td>"
+                 f"<td class=n>{fmt_delta(t, rm.get('temperature_prev'))}</td><td class=n>{rng}</td>"
+                 f"<td class=n>{'n/a' if h is None else f'{h:.0f}%'}</td><td class=n>{'' if h is None else rm['damp_hours']}</td></tr>")
+    table = (f"<table><tr><th>Room</th><th class=n>°C avg</th><th class=n>vs prev week</th><th class=n>hourly range</th>"
+             f"<th class=n>humidity</th><th class=n>h above {cl['limit']:.0f}%</th></tr>{rows}</table>") if rows else ""
+    text = "<br>".join(e(x) for x in (heating_line(cl), gas_line(cl)) if x)
+    since = (f"<div class=fine>Climate data since {cl['first']:%a %d %b %Y}. Heating = boiler relay on; burner = boiler drawing "
+             f"its firing power.</div>") if cl["first"] else ""
+    return f"<h2>Heating and indoor climate</h2>{f'<p>{text}</p>' if text else ''}{bars}{table}{since}"
+
+
 def text_report(r):
     p28 = r["p28"]
     H, C = r["H"], r["costs"]
@@ -51,6 +131,10 @@ def text_report(r):
     for c in r["devices"]:
         L.append(f"  {c['label']:<36}{c['cur']:7.1f}  {fmt_pct(pct(c['cur'], c['prev'])):>6}  {fmt_pct(pct(c['cur'], c['avg4'])):>6}")
     L.append("")
+    if r.get("climate"):
+        L.append("Heating and indoor climate:")
+        L += [f"  {x}" for x in climate_lines(r["climate"])]
+        L.append("")
     L.append("Patterns (last 4 weeks):")
     L.append(f"  Weekday avg {r['wd']:.1f} kWh/day, weekend avg {r['we']:.1f} kWh/day.")
     if r["peak_h"] is not None:
@@ -139,6 +223,8 @@ def html_report(r):
             parts.append(f"<h2>Individually metered</h2><div class=fine>Already counted in the circuits above, not additive.</div>{table(r['devices'], 'Device')}")
     elif r["devices"]:
         parts.append(f"<h2>Individually metered</h2><div class=fine>Part of the house total.</div>{table(r['devices'], 'Device')}")
+    if r.get("climate"):
+        parts.append(climate_html(r["climate"]))
     breakdown = "\n".join(parts)
     return f"""<!doctype html><html><head><meta charset=utf-8><style>
 body{{font:15px/1.45 system-ui,sans-serif;max-width:640px;margin:0 auto;padding:16px;color:#1b1b1f}}

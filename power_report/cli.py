@@ -14,6 +14,8 @@ site with `ha`, or as the forced command of an SSH key for a site with `ssh`. En
 to kWh. House total = the single grid source of HA's energy config, or the configured `house` meter when the grid
 sources are tariff registers (stored as kind=tariff with their HA prices). A site with an `ev` table gets
 `derived.ev_charging` (kind ev) from the house's night load; 3+ nights in a row without charging count as away.
+A site with a `climate` table also gets heating hours, gas and room temperature/humidity in climate_hourly and a
+"Heating and indoor climate" section in its report.
 """
 
 import sys

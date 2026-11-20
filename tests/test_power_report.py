@@ -19,7 +19,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 from power_report import cli, config, model, render  # noqa: E402
-from power_report.sync import pretty, site_entities  # noqa: E402
+from power_report.sync import climate_entities, climate_rows, pretty, site_entities  # noqa: E402
 
 TZ = ZoneInfo("Europe/Lisbon")
 
@@ -174,6 +174,64 @@ class Render(unittest.TestCase):
         self.assertIsNone(render.pct(5, 0))
         self.assertEqual(render.fmt_pct(None), "n/a")
         self.assertEqual(render.fmt_pct(render.pct(110, 100)), "+10%")
+
+
+class Climate(unittest.TestCase):
+    def test_example_config_has_rooms(self):
+        c = config.load(str(REPO / "config.example.toml"))
+        ents = climate_entities(c.sites["home"])
+        self.assertEqual(ents["sensor.heating_hours_today"], ("heating_hours", "Heating (relay on)"))
+        self.assertEqual(ents["sensor.living_room_humidity"], ("humidity", "Living room"))
+        self.assertEqual(climate_entities(c.sites["cabin"]), {})          # no [climate] table: nothing
+
+    def test_rows_counters_are_hourly_changes_measurements_means(self):
+        ents = {"sensor.h": ("heating_hours", "Heating"), "sensor.t": ("temperature", "Room")}
+        t0 = 1_772_000_000 - 1_772_000_000 % 3600
+        data = {"sensor.h": [[t0, 1.0, None], [t0 + 3600, 1.5, None], [t0 + 7200, None, None], [t0 + 4 * 3600, 2.5, None]],
+                "sensor.t": [[t0, None, 19.0], [t0 + 3600, None, 19.5]]}
+        rows = climate_rows("home", ents, data, {"sensor.h": t0 + 1, "sensor.t": t0})
+        h = [(r[2].timestamp() - t0, r[5]) for r in rows if r[1] == "sensor.h"]
+        self.assertEqual(h, [(3600, 0.5), (4 * 3600, 1.0)])             # before `since` skipped, gap -> next hour
+        self.assertEqual([r[5] for r in rows if r[1] == "sensor.t"], [19.0, 19.5])
+        self.assertEqual(rows[0][3:5], ("heating_hours", "Heating"))
+
+    def climate(self):
+        days = {dt.date(2026, 3, 2) + dt.timedelta(days=i): (1.5 if i else None) for i in range(7)}
+        return dict(counters={"heating_hours": dict(cur=9.0, prev=6.0, hours=168, days=days),
+                              "burner_hours": dict(cur=3.0, prev=2.0, hours=168, days=days),
+                              "gas": dict(cur=2.5, prev=2.0, hours=168, days=days)},
+                    rooms=[dict(label="Up <stairs>", temperature_cur=20.04, temperature_prev=19.5, temperature_min=18.0,
+                                temperature_max=21.5, temperature_hours=168, humidity_cur=66.0, humidity_prev=60.0,
+                                humidity_min=55.0, humidity_max=70.0, humidity_hours=168, damp_hours=30),
+                           dict(label="Attic", temperature_cur=None, temperature_prev=None, temperature_min=None,
+                                temperature_max=None, temperature_hours=0)],
+                    limit=65.0, gas_kwh=11.0, first=dt.date(2026, 2, 20))
+
+    def test_text_section(self):
+        t = render.text_report(figures(climate=self.climate()))
+        self.assertIn("Heating and indoor climate:", t)
+        self.assertIn("Heating on 9.0 h (+50% vs previous week, 6.0 h), burner 3.0 h (33% of it).", t)
+        self.assertIn("Gas 2.50 m³ = about 28 kWh (+25% vs previous week; from meter readings).", t)
+        self.assertIn("Up <stairs>: 20.0 °C average (+0.5 °C vs previous week), hourly 18.0 to 21.5 °C; "
+                      "humidity 66% average, 30 h above 65%.", t)
+        self.assertNotIn("Attic", t)                                       # no data: no line
+        self.assertNotIn("Heating and indoor climate", render.text_report(figures()))
+        empty = self.climate()
+        for k in empty["counters"].values():
+            k.update(cur=0.0, prev=0.0, hours=0)
+        t = render.text_report(figures(climate=empty))
+        self.assertIn("Heating: no data for this week yet.", t)
+        self.assertIn("Gas: no data for this week yet.", t)
+        self.assertNotIn("Daily heating hours", t)
+        self.assertNotIn("class=bars><tr><td class=bl>Mon 02</td><td class=bt><div style='width:0%;background:#d9822b'",
+                         render.html_report(figures(climate=empty)))
+
+    def test_html_section(self):
+        h = render.html_report(figures(climate=self.climate()))
+        self.assertIn("<h2>Heating and indoor climate</h2>", h)
+        self.assertIn("Up &lt;stairs&gt;", h)
+        self.assertIn("1.5 h</td>", h)
+        self.assertIn("Climate data since Fri 20 Feb 2026.", h)
 
 
 class Run(unittest.TestCase):
