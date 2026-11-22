@@ -4,9 +4,11 @@ The real-data check is tools/equivalence.py, which compares this code with a pre
 database and keeps its data outside the repo.
 """
 
+import atexit
 import datetime as dt
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -24,9 +26,15 @@ from power_report.sync import climate_entities, climate_rows, pretty, site_entit
 TZ = ZoneInfo("Europe/Lisbon")
 
 
+def tmpdir() -> Path:
+    """A temporary directory that is removed when the test run ends."""
+    d = Path(tempfile.mkdtemp(prefix="power-report-test-"))
+    atexit.register(shutil.rmtree, d, ignore_errors=True)
+    return d
+
+
 def cfg(extra=""):
-    d = tempfile.mkdtemp()
-    p = Path(d) / "c.toml"
+    p = tmpdir() / "c.toml"
     p.write_text('timezone = "Europe/Lisbon"\n[mail]\nsender = "x <x@example.org>"\n'
                  '[sites.home]\nha = "/nonexistent"\ncircuits = ["sensor.c1_energy"]\n' + extra +
                  '[sites.home.labels]\n"sensor.c1_energy" = "Sockets"\n')
@@ -41,13 +49,13 @@ class Config(unittest.TestCase):
         self.assertEqual(str(c.tz), "Europe/Lisbon")
 
     def test_site_needs_a_source(self):
-        p = Path(tempfile.mkdtemp()) / "c.toml"
+        p = tmpdir() / "c.toml"
         p.write_text("[sites.x]\ncircuits = []\n")
         with self.assertRaises(ValueError):
             config.load(str(p))
 
     def test_env_var_selects_the_file(self):
-        os.environ["POWER_REPORT_CONFIG"] = str(Path(tempfile.mkdtemp()) / "missing.toml")
+        os.environ["POWER_REPORT_CONFIG"] = str(tmpdir() / "missing.toml")
         try:
             with self.assertRaises(FileNotFoundError):
                 config.load()
@@ -261,7 +269,7 @@ class Exporter(unittest.TestCase):
     """The HA-side exporter against a synthetic Home Assistant config directory."""
 
     def setUp(self):
-        self.ha = Path(tempfile.mkdtemp())
+        self.ha = tmpdir()
         st = self.ha / ".storage"
         st.mkdir()
         (st / "energy").write_text(json.dumps({"data": {"energy_sources": [{"type": "grid", "stat_energy_from": "sensor.house_energy"}],
